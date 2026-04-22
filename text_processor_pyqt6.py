@@ -2,16 +2,17 @@
 import sys
 import os
 import json
+import re
 from pathlib import Path
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QGroupBox, QPushButton, QLabel, QCheckBox, QComboBox,
-    QLineEdit, QTabWidget, QListWidget, QTextEdit, QStatusBar, QFrame,
-    QFileDialog, QMessageBox, QSpacerItem, QSizePolicy, QToolBar,
-    QMenu, QMenuBar
+    QSplitter, QPushButton, QLabel, QCheckBox, QComboBox,
+    QLineEdit, QListWidget, QListWidgetItem, QTextEdit, QStatusBar, QFrame,
+    QFileDialog, QMessageBox, QTabWidget, QSpinBox, QGroupBox,
+    QButtonGroup, QRadioButton, QDialog, QDialogButtonBox, QScrollArea
 )
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QFont, QIcon, QAction, QColor, QPalette
+from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtGui import QFont, QIcon, QAction, QColor, QPalette, QBrush
 
 
 class ThemeManager:
@@ -175,31 +176,278 @@ class CardWidget(QFrame):
         self.content_layout.addLayout(layout)
 
 
+class FileListItem:
+    def __init__(self, filepath):
+        self.filepath = str(Path(filepath).resolve())
+        self.name = Path(filepath).name
+        self.lines = []
+        self.encoding = 'utf-8'
+        self.newline_char = '\n'
+        
+    def load(self):
+        try:
+            with open(self.filepath, 'rb') as f:
+                raw_content = f.read()
+            
+            self.encoding, self.newline_char, _ = self._detect_encoding_and_newline(raw_content)
+            content = raw_content.decode(self.encoding, errors='replace')
+            self.lines = content.split(self.newline_char)
+            return True
+        except:
+            return False
+    
+    def _detect_encoding_and_newline(self, raw_content):
+        if raw_content.startswith(b'\xef\xbb\xbf'):
+            encoding = 'utf-8-sig'
+        elif raw_content.startswith(b'\xff\xfe') or raw_content.startswith(b'\xfe\xff'):
+            encoding = 'utf-16'
+        else:
+            try:
+                raw_content.decode('utf-8')
+                encoding = 'utf-8'
+            except UnicodeDecodeError:
+                encoding = 'gbk'
+        
+        crlf_count = raw_content.count(b'\r\n')
+        lf_count = raw_content.count(b'\n') - crlf_count
+        cr_count = raw_content.count(b'\r') - crlf_count
+        
+        if crlf_count > lf_count and crlf_count > cr_count:
+            newline_char = '\r\n'
+            newline_name = 'CRLF (Windows)'
+        elif lf_count > cr_count:
+            newline_char = '\n'
+            newline_name = 'LF (Unix/Linux)'
+        elif cr_count > 0:
+            newline_char = '\r'
+            newline_name = 'CR (Old Mac)'
+        else:
+            newline_char = '\n'
+            newline_name = 'LF (默认)'
+        
+        return encoding, newline_char, newline_name
+    
+    def line_count(self):
+        return len(self.lines)
+
+
+class SettingsDialog(QDialog):
+    def __init__(self, parent=None, work_dir=""):
+        super().__init__(parent)
+        self.setWindowTitle("设置")
+        self.setMinimumWidth(450)
+        self.work_dir = work_dir
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        work_dir_group = QGroupBox("工作目录设置")
+        work_dir_layout = QVBoxLayout(work_dir_group)
+        
+        desc_label = QLabel("所有生成的文件将保存到以下目录：")
+        desc_label.setWordWrap(True)
+        work_dir_layout.addWidget(desc_label)
+        
+        dir_layout = QHBoxLayout()
+        self.dir_edit = QLineEdit(self.work_dir)
+        dir_layout.addWidget(self.dir_edit)
+        
+        browse_btn = StyledButton("浏览...", button_type="secondary")
+        browse_btn.clicked.connect(self.browse_dir)
+        dir_layout.addWidget(browse_btn)
+        
+        work_dir_layout.addLayout(dir_layout)
+        
+        default_btn = StyledButton("恢复默认", button_type="secondary")
+        default_btn.clicked.connect(self.restore_default)
+        work_dir_layout.addWidget(default_btn)
+        
+        layout.addWidget(work_dir_group)
+        
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+    
+    def browse_dir(self):
+        dir_path = QFileDialog.getExistingDirectory(self, "选择工作目录", self.dir_edit.text())
+        if dir_path:
+            self.dir_edit.setText(dir_path)
+    
+    def restore_default(self):
+        default_dir = str(Path(__file__).parent / "txt")
+        self.dir_edit.setText(default_dir)
+    
+    def get_work_dir(self):
+        return self.dir_edit.text()
+
+
+class ColumnSelectDialog(QDialog):
+    def __init__(self, parent=None, max_columns=10, current_columns=None):
+        super().__init__(parent)
+        self.setWindowTitle("选择导出列")
+        self.setMinimumWidth(400)
+        self.max_columns = max_columns
+        self.selected_columns = current_columns or []
+        
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        desc_label = QLabel("选择要导出的列（从1开始），用逗号分隔（如：1,3,5）：")
+        desc_label.setWordWrap(True)
+        layout.addWidget(desc_label)
+        
+        self.columns_edit = QLineEdit()
+        if self.selected_columns:
+            self.columns_edit.setText(','.join(str(c) for c in self.selected_columns))
+        layout.addWidget(self.columns_edit)
+        
+        example_label = QLabel("示例：\n- 导出第1列：输入 1\n- 导出第1、3、5列：输入 1,3,5\n- 导出第1到第5列：输入 1-5")
+        example_label.setWordWrap(True)
+        layout.addWidget(example_label)
+        
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+    
+    def get_columns(self):
+        text = self.columns_edit.text().strip()
+        if not text:
+            return []
+        
+        columns = []
+        parts = text.split(',')
+        for part in parts:
+            part = part.strip()
+            if '-' in part:
+                start_end = part.split('-')
+                if len(start_end) == 2:
+                    try:
+                        start = int(start_end[0].strip())
+                        end = int(start_end[1].strip())
+                        if start > 0 and end > 0:
+                            columns.extend(range(min(start, end), max(start, end) + 1))
+                    except:
+                        pass
+            else:
+                try:
+                    col = int(part)
+                    if col > 0:
+                        columns.append(col)
+                except:
+                    pass
+        
+        return sorted(list(set(columns)))
+
+
 class TextProcessorWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("文本处理工具")
-        self.setMinimumSize(850, 550)
-        self.resize(1000, 650)
+        self.setMinimumSize(1100, 700)
+        self.resize(1200, 750)
         
         self.current_theme = "system"
         self.actual_theme = ThemeManager.detect_system_theme()
         self.theme_colors = ThemeManager.LIGHT if self.actual_theme == "light" else ThemeManager.DARK
         
-        self.current_file = None
-        self.file_content = []
-        self.newline_char = '\n'
-        self.history_file = Path(__file__).parent / "history.json"
-        self.history = {"imported": [], "generated": []}
-        self.max_history = 20
+        self.default_work_dir = str(Path(__file__).parent / "txt")
+        self.settings_file = Path(__file__).parent / "settings.json"
+        self.load_settings()
         
-        self.use_separator = False
-        self.use_specific_param = False
+        self.file_list = []
+        self.current_file_item = None
         
-        self.load_history()
+        self.config_file = Path(__file__).parent / "config.json"
+        self.load_config()
+        
         self.setup_menu_bar()
         self.setup_ui()
         self.apply_theme(self.actual_theme)
+        
+        self.ensure_work_dir()
+    
+    def load_settings(self):
+        if self.settings_file.exists():
+            try:
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                    self.work_dir = settings.get("work_dir", self.default_work_dir)
+                    self.current_theme = settings.get("theme", "system")
+                    if self.current_theme == "system":
+                        self.actual_theme = ThemeManager.detect_system_theme()
+                    else:
+                        self.actual_theme = self.current_theme
+            except:
+                self.work_dir = self.default_work_dir
+        else:
+            self.work_dir = self.default_work_dir
+    
+    def save_settings(self):
+        try:
+            settings = {
+                "work_dir": self.work_dir,
+                "theme": self.current_theme
+            }
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+    
+    def load_config(self):
+        self.export_separator = ','
+        self.export_columns = []
+        self.extract_keywords = []
+        self.extract_regex = ""
+        self.split_lines = 1000
+        self.split_prefix = "_分割文本"
+        
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    self.export_separator = config.get("export_separator", ',')
+                    self.export_columns = config.get("export_columns", [])
+                    self.extract_keywords = config.get("extract_keywords", [])
+                    self.extract_regex = config.get("extract_regex", "")
+                    self.split_lines = config.get("split_lines", 1000)
+                    self.split_prefix = config.get("split_prefix", "_分割文本")
+            except:
+                pass
+    
+    def save_config(self):
+        try:
+            config = {
+                "export_separator": self.export_separator,
+                "export_columns": self.export_columns,
+                "extract_keywords": self.extract_keywords,
+                "extract_regex": self.extract_regex,
+                "split_lines": self.split_lines,
+                "split_prefix": self.split_prefix
+            }
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+    
+    def ensure_work_dir(self):
+        try:
+            os.makedirs(self.work_dir, exist_ok=True)
+        except:
+            pass
     
     def setup_menu_bar(self):
         menubar = self.menuBar()
@@ -209,6 +457,16 @@ class TextProcessorWindow(QMainWindow):
         import_action = QAction("导入文件...", self)
         import_action.triggered.connect(self.import_file)
         file_menu.addAction(import_action)
+        
+        import_multi_action = QAction("导入多个文件...", self)
+        import_multi_action.triggered.connect(self.import_multi_files)
+        file_menu.addAction(import_multi_action)
+        
+        file_menu.addSeparator()
+        
+        settings_action = QAction("设置...", self)
+        settings_action.triggered.connect(self.show_settings)
+        file_menu.addAction(settings_action)
         
         file_menu.addSeparator()
         
@@ -263,49 +521,62 @@ class TextProcessorWindow(QMainWindow):
         self.import_btn.clicked.connect(self.import_file)
         toolbar_layout.addWidget(self.import_btn)
         
+        self.import_multi_btn = StyledButton("批量导入", button_type="primary")
+        self.import_multi_btn.clicked.connect(self.import_multi_files)
+        toolbar_layout.addWidget(self.import_multi_btn)
+        
         toolbar_layout.addStretch()
         
-        self.open_folder_btn = StyledButton("打开目录", button_type="secondary")
-        self.open_folder_btn.clicked.connect(self.open_containing_folder)
-        toolbar_layout.addWidget(self.open_folder_btn)
+        self.remove_btn = StyledButton("移除", button_type="secondary")
+        self.remove_btn.clicked.connect(self.remove_selected_files)
+        toolbar_layout.addWidget(self.remove_btn)
         
-        self.clear_history_btn = StyledButton("清空历史", button_type="secondary")
-        self.clear_history_btn.clicked.connect(self.clear_history)
-        toolbar_layout.addWidget(self.clear_history_btn)
+        self.clear_btn = StyledButton("清空", button_type="secondary")
+        self.clear_btn.clicked.connect(self.clear_all_files)
+        toolbar_layout.addWidget(self.clear_btn)
         
         toolbar_card.add_layout(toolbar_layout)
         
         left_layout.addWidget(toolbar_card)
         
-        history_card = CardWidget("历史记录")
+        file_list_card = CardWidget("文件列表（可多选）")
         
-        history_tabs = QTabWidget()
+        self.file_list_widget = QListWidget()
+        self.file_list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.file_list_widget.itemClicked.connect(self.on_file_select)
+        self.file_list_widget.itemDoubleClicked.connect(self.on_file_double_click)
+        file_list_card.add_widget(self.file_list_widget)
         
-        import_tab = QWidget()
-        import_layout = QVBoxLayout(import_tab)
-        import_layout.setContentsMargins(6, 6, 6, 6)
+        info_layout = QHBoxLayout()
+        self.file_count_label = QLabel("文件数: 0")
+        info_layout.addWidget(self.file_count_label)
         
-        self.import_listbox = QListWidget()
-        self.import_listbox.itemClicked.connect(self.on_import_select)
-        self.import_listbox.itemDoubleClicked.connect(self.on_import_double_click)
-        import_layout.addWidget(self.import_listbox)
+        self.total_lines_label = QLabel("总行数: 0")
+        info_layout.addWidget(self.total_lines_label)
         
-        history_tabs.addTab(import_tab, "导入记录")
+        info_layout.addStretch()
         
-        generated_tab = QWidget()
-        generated_layout = QVBoxLayout(generated_tab)
-        generated_layout.setContentsMargins(6, 6, 6, 6)
+        file_list_card.add_layout(info_layout)
         
-        self.generated_listbox = QListWidget()
-        self.generated_listbox.itemClicked.connect(self.on_generated_select)
-        self.generated_listbox.itemDoubleClicked.connect(self.on_generated_double_click)
-        generated_layout.addWidget(self.generated_listbox)
+        left_layout.addWidget(file_list_card, stretch=1)
         
-        history_tabs.addTab(generated_tab, "生成记录")
+        work_dir_card = CardWidget("工作目录")
         
-        history_card.add_widget(history_tabs)
+        work_dir_layout = QHBoxLayout()
+        self.work_dir_label = QLabel(f"输出目录: {self.work_dir}")
+        self.work_dir_label.setWordWrap(True)
+        work_dir_layout.addWidget(self.work_dir_label)
         
-        left_layout.addWidget(history_card, stretch=1)
+        work_dir_layout.addStretch()
+        
+        self.open_work_dir_btn = StyledButton("打开", button_type="secondary")
+        self.open_work_dir_btn.setMaximumWidth(60)
+        self.open_work_dir_btn.clicked.connect(self.open_work_dir)
+        work_dir_layout.addWidget(self.open_work_dir_btn)
+        
+        work_dir_card.add_layout(work_dir_layout)
+        
+        left_layout.addWidget(work_dir_card)
         
         content_splitter.addWidget(left_panel)
         
@@ -314,68 +585,24 @@ class TextProcessorWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
         
-        config_card = CardWidget("去重配置")
+        self.function_tabs = QTabWidget()
         
-        row1_layout = QHBoxLayout()
-        row1_layout.setSpacing(10)
+        deduplication_tab = self.create_deduplication_tab()
+        self.function_tabs.addTab(deduplication_tab, "去重")
         
-        self.separator_check = QCheckBox("分隔符分割")
-        self.separator_check.stateChanged.connect(self.toggle_separator_options)
-        row1_layout.addWidget(self.separator_check)
+        export_tab = self.create_export_tab()
+        self.function_tabs.addTab(export_tab, "指定格式导出")
         
-        separator_label = QLabel("分隔符:")
-        row1_layout.addWidget(separator_label)
+        extract_tab = self.create_extract_tab()
+        self.function_tabs.addTab(extract_tab, "文本提取")
         
-        self.separator_combo = QComboBox()
-        self.separator_combo.addItems([',', ';', '\\t', '|', ' ', '其他'])
-        self.separator_combo.setEnabled(False)
-        self.separator_combo.setMaximumWidth(70)
-        row1_layout.addWidget(self.separator_combo)
+        split_merge_tab = self.create_split_merge_tab()
+        self.function_tabs.addTab(split_merge_tab, "分割/合并")
         
-        custom_label = QLabel("自定义:")
-        row1_layout.addWidget(custom_label)
+        compare_tab = self.create_compare_tab()
+        self.function_tabs.addTab(compare_tab, "差异对比")
         
-        self.custom_separator = QLineEdit()
-        self.custom_separator.setEnabled(False)
-        self.custom_separator.setMaximumWidth(60)
-        row1_layout.addWidget(self.custom_separator)
-        
-        row1_layout.addStretch()
-        
-        config_card.add_layout(row1_layout)
-        
-        row2_layout = QHBoxLayout()
-        row2_layout.setSpacing(10)
-        
-        self.param_check = QCheckBox("指定列参数")
-        self.param_check.stateChanged.connect(self.toggle_param_options)
-        row2_layout.addWidget(self.param_check)
-        
-        param_label = QLabel("参数位置:")
-        row2_layout.addWidget(param_label)
-        
-        self.param_position = QLineEdit("1")
-        self.param_position.setEnabled(False)
-        self.param_position.setMaximumWidth(50)
-        row2_layout.addWidget(self.param_position)
-        
-        suffix_label = QLabel("输出后缀:")
-        row2_layout.addWidget(suffix_label)
-        
-        self.output_suffix = QLineEdit("_去重复")
-        self.output_suffix.setMaximumWidth(100)
-        row2_layout.addWidget(self.output_suffix)
-        
-        row2_layout.addStretch()
-        
-        self.process_btn = StyledButton("去重处理", button_type="primary")
-        self.process_btn.setMinimumWidth(90)
-        self.process_btn.clicked.connect(self.process_deduplication)
-        row2_layout.addWidget(self.process_btn)
-        
-        config_card.add_layout(row2_layout)
-        
-        right_layout.addWidget(config_card)
+        right_layout.addWidget(self.function_tabs)
         
         preview_card = CardWidget("文件预览")
         
@@ -388,7 +615,7 @@ class TextProcessorWindow(QMainWindow):
         right_layout.addWidget(preview_card, stretch=1)
         
         content_splitter.addWidget(right_panel)
-        content_splitter.setSizes([280, 720])
+        content_splitter.setSizes([350, 850])
         
         main_layout.addWidget(content_splitter, stretch=1)
         
@@ -404,8 +631,552 @@ class TextProcessorWindow(QMainWindow):
         self.newline_label = QLabel("换行符: 未知")
         self.status_bar.addPermanentWidget(self.newline_label)
         
-        self.update_history_display()
         self.setup_icons()
+    
+    def create_deduplication_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        
+        config_group = QGroupBox("去重配置")
+        config_layout = QVBoxLayout(config_group)
+        config_layout.setSpacing(8)
+        
+        row1 = QHBoxLayout()
+        
+        self.dedup_separator_check = QCheckBox("使用分隔符分割行进行比较")
+        self.dedup_separator_check.stateChanged.connect(self.toggle_dedup_separator)
+        row1.addWidget(self.dedup_separator_check)
+        
+        row1.addStretch()
+        
+        config_layout.addLayout(row1)
+        
+        row2 = QHBoxLayout()
+        
+        self.dedup_separator_label = QLabel("分隔符:")
+        row2.addWidget(self.dedup_separator_label)
+        
+        self.dedup_separator_combo = QComboBox()
+        self.dedup_separator_combo.addItems([',', ';', '\\t', '|', ' ', '其他'])
+        self.dedup_separator_combo.setEnabled(False)
+        self.dedup_separator_combo.setMaximumWidth(80)
+        row2.addWidget(self.dedup_separator_combo)
+        
+        self.dedup_custom_label = QLabel("自定义:")
+        row2.addWidget(self.dedup_custom_label)
+        
+        self.dedup_custom_separator = QLineEdit()
+        self.dedup_custom_separator.setEnabled(False)
+        self.dedup_custom_separator.setMaximumWidth(70)
+        row2.addWidget(self.dedup_custom_separator)
+        
+        row2.addStretch()
+        
+        config_layout.addLayout(row2)
+        
+        row3 = QHBoxLayout()
+        
+        self.dedup_param_check = QCheckBox("仅根据指定列参数去重")
+        self.dedup_param_check.stateChanged.connect(self.toggle_dedup_param)
+        row3.addWidget(self.dedup_param_check)
+        
+        row3.addStretch()
+        
+        config_layout.addLayout(row3)
+        
+        row4 = QHBoxLayout()
+        
+        self.dedup_param_label = QLabel("参数位置 (从1开始):")
+        row4.addWidget(self.dedup_param_label)
+        
+        self.dedup_param_position = QSpinBox()
+        self.dedup_param_position.setMinimum(1)
+        self.dedup_param_position.setMaximum(999)
+        self.dedup_param_position.setValue(1)
+        self.dedup_param_position.setEnabled(False)
+        self.dedup_param_position.setMaximumWidth(70)
+        row4.addWidget(self.dedup_param_position)
+        
+        row4.addStretch()
+        
+        config_layout.addLayout(row4)
+        
+        row5 = QHBoxLayout()
+        
+        self.dedup_suffix_label = QLabel("输出文件名后缀:")
+        row5.addWidget(self.dedup_suffix_label)
+        
+        self.dedup_output_suffix = QLineEdit("_去重复")
+        self.dedup_output_suffix.setMaximumWidth(120)
+        row5.addWidget(self.dedup_output_suffix)
+        
+        row5.addStretch()
+        
+        config_layout.addLayout(row5)
+        
+        layout.addWidget(config_group)
+        
+        action_layout = QHBoxLayout()
+        action_layout.addStretch()
+        
+        self.dedup_process_btn = StyledButton("执行去重", button_type="primary")
+        self.dedup_process_btn.setMinimumWidth(120)
+        self.dedup_process_btn.clicked.connect(self.execute_deduplication)
+        action_layout.addWidget(self.dedup_process_btn)
+        
+        action_layout.addStretch()
+        
+        layout.addLayout(action_layout)
+        
+        layout.addStretch()
+        
+        return widget
+    
+    def create_export_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        
+        config_group = QGroupBox("导出配置")
+        config_layout = QVBoxLayout(config_group)
+        config_layout.setSpacing(8)
+        
+        row1 = QHBoxLayout()
+        
+        self.export_separator_label = QLabel("输入分隔符:")
+        row1.addWidget(self.export_separator_label)
+        
+        self.export_input_separator = QComboBox()
+        self.export_input_separator.addItems([',', ';', '\\t', '|', ' ', '其他'])
+        self.export_input_separator.setMaximumWidth(80)
+        row1.addWidget(self.export_input_separator)
+        
+        self.export_custom_label = QLabel("自定义:")
+        row1.addWidget(self.export_custom_label)
+        
+        self.export_custom_input = QLineEdit()
+        self.export_custom_input.setMaximumWidth(70)
+        row1.addWidget(self.export_custom_input)
+        
+        row1.addStretch()
+        
+        config_layout.addLayout(row1)
+        
+        row2 = QHBoxLayout()
+        
+        self.export_columns_label = QLabel("导出列:")
+        row2.addWidget(self.export_columns_label)
+        
+        self.export_columns_btn = StyledButton("选择列...", button_type="secondary")
+        self.export_columns_btn.clicked.connect(self.select_export_columns)
+        row2.addWidget(self.export_columns_btn)
+        
+        self.export_columns_display = QLabel("全部列")
+        self.export_columns_display.setStyleSheet("font-style: italic;")
+        row2.addWidget(self.export_columns_display)
+        
+        row2.addStretch()
+        
+        config_layout.addLayout(row2)
+        
+        row3 = QHBoxLayout()
+        
+        self.export_output_sep_label = QLabel("输出分隔符:")
+        row3.addWidget(self.export_output_sep_label)
+        
+        self.export_output_separator = QComboBox()
+        self.export_output_separator.addItems([',', ';', '\\t', '|', ' ', '其他'])
+        self.export_output_separator.setCurrentText(self.export_separator)
+        self.export_output_separator.setMaximumWidth(80)
+        row3.addWidget(self.export_output_separator)
+        
+        self.export_custom_output_label = QLabel("自定义:")
+        row3.addWidget(self.export_custom_output_label)
+        
+        self.export_custom_output = QLineEdit()
+        self.export_custom_output.setMaximumWidth(70)
+        row3.addWidget(self.export_custom_output)
+        
+        row3.addStretch()
+        
+        config_layout.addLayout(row3)
+        
+        row4 = QHBoxLayout()
+        
+        self.export_suffix_label = QLabel("输出文件名后缀:")
+        row4.addWidget(self.export_suffix_label)
+        
+        self.export_output_suffix = QLineEdit("_导出")
+        self.export_output_suffix.setMaximumWidth(120)
+        row4.addWidget(self.export_output_suffix)
+        
+        row4.addStretch()
+        
+        config_layout.addLayout(row4)
+        
+        layout.addWidget(config_group)
+        
+        action_layout = QHBoxLayout()
+        action_layout.addStretch()
+        
+        self.export_process_btn = StyledButton("执行导出", button_type="primary")
+        self.export_process_btn.setMinimumWidth(120)
+        self.export_process_btn.clicked.connect(self.execute_export)
+        action_layout.addWidget(self.export_process_btn)
+        
+        action_layout.addStretch()
+        
+        layout.addLayout(action_layout)
+        
+        layout.addStretch()
+        
+        return widget
+    
+    def create_extract_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        
+        mode_group = QGroupBox("提取模式")
+        mode_layout = QVBoxLayout(mode_group)
+        
+        self.extract_mode_group = QButtonGroup(self)
+        
+        self.extract_keyword_radio = QRadioButton("关键词提取")
+        self.extract_keyword_radio.setChecked(True)
+        self.extract_mode_group.addButton(self.extract_keyword_radio)
+        mode_layout.addWidget(self.extract_keyword_radio)
+        
+        self.extract_regex_radio = QRadioButton("正则提取")
+        self.extract_mode_group.addButton(self.extract_regex_radio)
+        mode_layout.addWidget(self.extract_regex_radio)
+        
+        self.extract_rule_radio = QRadioButton("规则匹配导出（行存在即导出）")
+        self.extract_mode_group.addButton(self.extract_rule_radio)
+        mode_layout.addWidget(self.extract_rule_radio)
+        
+        layout.addWidget(mode_group)
+        
+        config_group = QGroupBox("提取配置")
+        config_layout = QVBoxLayout(config_group)
+        config_layout.setSpacing(8)
+        
+        keyword_row = QHBoxLayout()
+        
+        self.keyword_label = QLabel("关键词 (多个用逗号分隔):")
+        keyword_row.addWidget(self.keyword_label)
+        
+        self.keyword_edit = QLineEdit()
+        self.keyword_edit.setPlaceholderText("例如: 关键词1,关键词2,关键词3")
+        keyword_row.addWidget(self.keyword_edit)
+        
+        config_layout.addLayout(keyword_row)
+        
+        regex_row = QHBoxLayout()
+        
+        self.regex_label = QLabel("正则表达式:")
+        regex_row.addWidget(self.regex_label)
+        
+        self.regex_edit = QLineEdit()
+        self.regex_edit.setPlaceholderText("例如: \\d+ 匹配数字")
+        regex_row.addWidget(self.regex_edit)
+        
+        config_layout.addLayout(regex_row)
+        
+        case_row = QHBoxLayout()
+        
+        self.case_sensitive_check = QCheckBox("区分大小写")
+        case_row.addWidget(self.case_sensitive_check)
+        
+        self.invert_check = QCheckBox("反向匹配（导出不匹配的行）")
+        case_row.addWidget(self.invert_check)
+        
+        case_row.addStretch()
+        
+        config_layout.addLayout(case_row)
+        
+        suffix_row = QHBoxLayout()
+        
+        self.extract_suffix_label = QLabel("输出文件名后缀:")
+        suffix_row.addWidget(self.extract_suffix_label)
+        
+        self.extract_output_suffix = QLineEdit("_提取")
+        self.extract_output_suffix.setMaximumWidth(120)
+        suffix_row.addWidget(self.extract_output_suffix)
+        
+        suffix_row.addStretch()
+        
+        config_layout.addLayout(suffix_row)
+        
+        layout.addWidget(config_group)
+        
+        action_layout = QHBoxLayout()
+        action_layout.addStretch()
+        
+        self.extract_process_btn = StyledButton("执行提取", button_type="primary")
+        self.extract_process_btn.setMinimumWidth(120)
+        self.extract_process_btn.clicked.connect(self.execute_extract)
+        action_layout.addWidget(self.extract_process_btn)
+        
+        action_layout.addStretch()
+        
+        layout.addLayout(action_layout)
+        
+        layout.addStretch()
+        
+        return widget
+    
+    def create_split_merge_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        
+        tabs = QTabWidget()
+        
+        split_tab = QWidget()
+        split_layout = QVBoxLayout(split_tab)
+        split_layout.setContentsMargins(0, 0, 0, 0)
+        split_layout.setSpacing(8)
+        
+        split_config = QGroupBox("分割配置")
+        split_config_layout = QVBoxLayout(split_config)
+        split_config_layout.setSpacing(8)
+        
+        row1 = QHBoxLayout()
+        
+        self.split_lines_label = QLabel("每个文件行数:")
+        row1.addWidget(self.split_lines_label)
+        
+        self.split_lines_spin = QSpinBox()
+        self.split_lines_spin.setMinimum(1)
+        self.split_lines_spin.setMaximum(999999)
+        self.split_lines_spin.setValue(self.split_lines)
+        self.split_lines_spin.setMaximumWidth(100)
+        row1.addWidget(self.split_lines_spin)
+        
+        row1.addStretch()
+        
+        split_config_layout.addLayout(row1)
+        
+        row2 = QHBoxLayout()
+        
+        self.split_prefix_label = QLabel("文件名前缀后缀:")
+        row2.addWidget(self.split_prefix_label)
+        
+        self.split_prefix_edit = QLineEdit(self.split_prefix)
+        self.split_prefix_edit.setPlaceholderText("例如: _分割文本")
+        self.split_prefix_edit.setMaximumWidth(150)
+        row2.addWidget(self.split_prefix_edit)
+        
+        row2.addStretch()
+        
+        split_config_layout.addLayout(row2)
+        
+        split_layout.addWidget(split_config)
+        
+        split_action = QHBoxLayout()
+        split_action.addStretch()
+        
+        self.split_process_btn = StyledButton("执行分割", button_type="primary")
+        self.split_process_btn.setMinimumWidth(120)
+        self.split_process_btn.clicked.connect(self.execute_split)
+        split_action.addWidget(self.split_process_btn)
+        
+        split_action.addStretch()
+        
+        split_layout.addLayout(split_action)
+        split_layout.addStretch()
+        
+        tabs.addTab(split_tab, "分割")
+        
+        merge_tab = QWidget()
+        merge_layout = QVBoxLayout(merge_tab)
+        merge_layout.setContentsMargins(0, 0, 0, 0)
+        merge_layout.setSpacing(8)
+        
+        merge_config = QGroupBox("合并配置")
+        merge_config_layout = QVBoxLayout(merge_config)
+        merge_config_layout.setSpacing(8)
+        
+        info_label = QLabel("合并说明：\n1. 在左侧文件列表中多选要合并的文件\n2. 文件将按列表中的顺序合并\n3. 输出文件将保存到工作目录")
+        info_label.setWordWrap(True)
+        merge_config_layout.addWidget(info_label)
+        
+        row1 = QHBoxLayout()
+        
+        self.merge_filename_label = QLabel("输出文件名:")
+        row1.addWidget(self.merge_filename_label)
+        
+        self.merge_filename_edit = QLineEdit("合并结果")
+        self.merge_filename_edit.setMaximumWidth(150)
+        row1.addWidget(self.merge_filename_edit)
+        
+        row1.addStretch()
+        
+        merge_config_layout.addLayout(row1)
+        
+        merge_layout.addWidget(merge_config)
+        
+        merge_action = QHBoxLayout()
+        merge_action.addStretch()
+        
+        self.merge_process_btn = StyledButton("执行合并", button_type="primary")
+        self.merge_process_btn.setMinimumWidth(120)
+        self.merge_process_btn.clicked.connect(self.execute_merge)
+        merge_action.addWidget(self.merge_process_btn)
+        
+        merge_action.addStretch()
+        
+        merge_layout.addLayout(merge_action)
+        merge_layout.addStretch()
+        
+        tabs.addTab(merge_tab, "合并")
+        
+        layout.addWidget(tabs)
+        
+        return widget
+    
+    def create_compare_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        
+        file_select_group = QGroupBox("文件选择")
+        file_select_layout = QVBoxLayout(file_select_group)
+        file_select_layout.setSpacing(8)
+        
+        row1 = QHBoxLayout()
+        
+        self.compare_file_a_label = QLabel("文件A:")
+        row1.addWidget(self.compare_file_a_label)
+        
+        self.compare_file_a_combo = QComboBox()
+        self.compare_file_a_combo.setMinimumWidth(200)
+        row1.addWidget(self.compare_file_a_combo)
+        
+        row1.addStretch()
+        
+        file_select_layout.addLayout(row1)
+        
+        row2 = QHBoxLayout()
+        
+        self.compare_file_b_label = QLabel("文件B:")
+        row2.addWidget(self.compare_file_b_label)
+        
+        self.compare_file_b_combo = QComboBox()
+        self.compare_file_b_combo.setMinimumWidth(200)
+        row2.addWidget(self.compare_file_b_combo)
+        
+        row2.addStretch()
+        
+        file_select_layout.addLayout(row2)
+        
+        layout.addWidget(file_select_group)
+        
+        mode_group = QGroupBox("对比模式")
+        mode_layout = QVBoxLayout(mode_group)
+        
+        self.compare_mode_group = QButtonGroup(self)
+        
+        self.compare_remove_radio = QRadioButton("功能1: 去除A文件中含有B文件的重复数据（A - B）")
+        self.compare_remove_radio.setChecked(True)
+        self.compare_mode_group.addButton(self.compare_remove_radio)
+        mode_layout.addWidget(self.compare_remove_radio)
+        
+        self.compare_common_radio = QRadioButton("功能2: 得到A文件中含有B文件的共有数据（A ∩ B）")
+        self.compare_mode_group.addButton(self.compare_common_radio)
+        mode_layout.addWidget(self.compare_common_radio)
+        
+        layout.addWidget(mode_group)
+        
+        config_group = QGroupBox("文件B分析配置（可选）")
+        config_layout = QVBoxLayout(config_group)
+        config_layout.setSpacing(8)
+        
+        self.compare_use_param_check = QCheckBox("文件B只分析指定参数列")
+        self.compare_use_param_check.stateChanged.connect(self.toggle_compare_param)
+        config_layout.addWidget(self.compare_use_param_check)
+        
+        row1 = QHBoxLayout()
+        
+        self.compare_separator_label = QLabel("分隔符:")
+        row1.addWidget(self.compare_separator_label)
+        
+        self.compare_separator_combo = QComboBox()
+        self.compare_separator_combo.addItems([',', ';', '\\t', '|', ' ', '其他'])
+        self.compare_separator_combo.setEnabled(False)
+        self.compare_separator_combo.setMaximumWidth(80)
+        row1.addWidget(self.compare_separator_combo)
+        
+        self.compare_custom_label = QLabel("自定义:")
+        row1.addWidget(self.compare_custom_label)
+        
+        self.compare_custom_separator = QLineEdit()
+        self.compare_custom_separator.setEnabled(False)
+        self.compare_custom_separator.setMaximumWidth(70)
+        row1.addWidget(self.compare_custom_separator)
+        
+        row1.addStretch()
+        
+        config_layout.addLayout(row1)
+        
+        row2 = QHBoxLayout()
+        
+        self.compare_col_label = QLabel("列位置:")
+        row2.addWidget(self.compare_col_label)
+        
+        self.compare_col_spin = QSpinBox()
+        self.compare_col_spin.setMinimum(1)
+        self.compare_col_spin.setMaximum(999)
+        self.compare_col_spin.setValue(1)
+        self.compare_col_spin.setEnabled(False)
+        self.compare_col_spin.setMaximumWidth(70)
+        row2.addWidget(self.compare_col_spin)
+        
+        row2.addStretch()
+        
+        config_layout.addLayout(row2)
+        
+        layout.addWidget(config_group)
+        
+        suffix_row = QHBoxLayout()
+        
+        self.compare_suffix_label = QLabel("输出文件名后缀:")
+        suffix_row.addWidget(self.compare_suffix_label)
+        
+        self.compare_output_suffix = QLineEdit("_对比结果")
+        self.compare_output_suffix.setMaximumWidth(120)
+        suffix_row.addWidget(self.compare_output_suffix)
+        
+        suffix_row.addStretch()
+        
+        layout.addLayout(suffix_row)
+        
+        action_layout = QHBoxLayout()
+        action_layout.addStretch()
+        
+        self.refresh_files_btn = StyledButton("刷新文件列表", button_type="secondary")
+        self.refresh_files_btn.clicked.connect(self.refresh_compare_file_list)
+        action_layout.addWidget(self.refresh_files_btn)
+        
+        self.compare_process_btn = StyledButton("执行对比", button_type="primary")
+        self.compare_process_btn.setMinimumWidth(120)
+        self.compare_process_btn.clicked.connect(self.execute_compare)
+        action_layout.addWidget(self.compare_process_btn)
+        
+        action_layout.addStretch()
+        
+        layout.addLayout(action_layout)
+        
+        layout.addStretch()
+        
+        return widget
     
     def setup_icons(self):
         from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
@@ -417,10 +1188,7 @@ class TextProcessorWindow(QMainWindow):
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             
-            if self.actual_theme == "dark":
-                primary_color = QColor(self.theme_colors['button_primary'])
-            else:
-                primary_color = QColor(self.theme_colors['button_primary'])
+            primary_color = QColor(self.theme_colors['button_primary'])
             
             painter.setPen(QPen(primary_color, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -451,9 +1219,13 @@ class TextProcessorWindow(QMainWindow):
             return QIcon(pixmap)
         
         self.import_btn.setIcon(create_icon("folder"))
-        self.process_btn.setIcon(create_icon("reload"))
-        self.open_folder_btn.setIcon(create_icon("open"))
-        self.clear_history_btn.setIcon(create_icon("trash"))
+        self.import_multi_btn.setIcon(create_icon("folder"))
+        self.dedup_process_btn.setIcon(create_icon("reload"))
+        self.export_process_btn.setIcon(create_icon("reload"))
+        self.extract_process_btn.setIcon(create_icon("reload"))
+        self.split_process_btn.setIcon(create_icon("reload"))
+        self.merge_process_btn.setIcon(create_icon("reload"))
+        self.compare_process_btn.setIcon(create_icon("reload"))
     
     def apply_theme(self, theme_name):
         if theme_name == "light":
@@ -478,7 +1250,6 @@ class TextProcessorWindow(QMainWindow):
         
         self.setPalette(palette)
         
-        self.update_history_display()
         self.update_styles()
         self.setup_icons()
     
@@ -570,9 +1341,6 @@ class TextProcessorWindow(QMainWindow):
                 padding: 5px 12px;
                 font-weight: normal;
             }}
-            QPushButton:hover {{
-                background-color: {primary_hover};
-            }}
             StyledButton[button_type="primary"] {{
                 background-color: {primary_bg};
                 color: {primary_text};
@@ -612,6 +1380,14 @@ class TextProcessorWindow(QMainWindow):
                 background-color: {primary_bg};
                 border-color: {primary_bg};
             }}
+            QRadioButton {{
+                color: {self.theme_colors['fg']};
+                spacing: 6px;
+            }}
+            QRadioButton::indicator {{
+                width: 14px;
+                height: 14px;
+            }}
             QComboBox {{
                 background-color: {entry_bg};
                 color: {entry_fg};
@@ -649,6 +1425,20 @@ class TextProcessorWindow(QMainWindow):
                 background-color: {self.theme_colors['disabled_bg']};
                 color: {self.theme_colors['disabled_fg']};
             }}
+            QSpinBox {{
+                background-color: {entry_bg};
+                color: {entry_fg};
+                border: 1px solid {entry_border};
+                border-radius: 3px;
+                padding: 3px 6px;
+            }}
+            QSpinBox:focus {{
+                border-color: {entry_focus};
+            }}
+            QSpinBox:disabled {{
+                background-color: {self.theme_colors['disabled_bg']};
+                color: {self.theme_colors['disabled_fg']};
+            }}
             QListWidget {{
                 background-color: {listbox_bg};
                 color: {listbox_fg};
@@ -680,7 +1470,7 @@ class TextProcessorWindow(QMainWindow):
             QTabBar::tab {{
                 background-color: {self.theme_colors['header_bg']};
                 color: {self.theme_colors['header_fg']};
-                padding: 6px 12px;
+                padding: 6px 15px;
                 border-top-left-radius: 3px;
                 border-top-right-radius: 3px;
                 margin-right: 1px;
@@ -691,6 +1481,18 @@ class TextProcessorWindow(QMainWindow):
             }}
             QTabBar::tab:hover {{
                 background-color: {self.theme_colors['card_bg']};
+            }}
+            QGroupBox {{
+                background-color: transparent;
+                border: 1px solid {card_border};
+                border-radius: 4px;
+                margin-top: 12px;
+                padding-top: 10px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
             }}
             QStatusBar {{
                 background-color: {self.theme_colors['statusbar_bg']};
@@ -739,6 +1541,9 @@ class TextProcessorWindow(QMainWindow):
             QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
                 width: 0px;
             }}
+            QDialog {{
+                background-color: {self.theme_colors['bg']};
+            }}
         """)
     
     def set_theme(self, theme):
@@ -749,154 +1554,23 @@ class TextProcessorWindow(QMainWindow):
             self.actual_theme = theme
         self.apply_theme(self.actual_theme)
         self.update_theme_menu()
+        self.save_settings()
     
-    def toggle_separator_options(self, state):
-        enabled = state == Qt.CheckState.Checked.value
-        self.separator_combo.setEnabled(enabled)
-        self.custom_separator.setEnabled(enabled)
-        self.use_separator = enabled
-        
-        if not enabled:
-            self.param_check.setChecked(False)
+    def show_settings(self):
+        dialog = SettingsDialog(self, self.work_dir)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_dir = dialog.get_work_dir()
+            if new_dir:
+                self.work_dir = new_dir
+                self.work_dir_label.setText(f"输出目录: {self.work_dir}")
+                self.ensure_work_dir()
+                self.save_settings()
     
-    def toggle_param_options(self, state):
-        enabled = state == Qt.CheckState.Checked.value
-        self.use_specific_param = enabled
-        
-        if enabled:
-            self.separator_check.setChecked(True)
-        
-        self.param_position.setEnabled(enabled)
-    
-    def load_history(self):
-        if self.history_file.exists():
-            try:
-                with open(self.history_file, 'r', encoding='utf-8') as f:
-                    self.history = json.load(f)
-            except:
-                self.history = {"imported": [], "generated": []}
-    
-    def save_history(self):
-        try:
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.history, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"保存历史记录失败: {e}")
-    
-    def add_import_history(self, filepath):
-        self._add_to_history("imported", filepath)
-    
-    def add_generated_history(self, filepath):
-        self._add_to_history("generated", filepath)
-    
-    def _add_to_history(self, history_type, filepath):
-        filepath = str(Path(filepath).resolve())
-        if filepath in self.history[history_type]:
-            self.history[history_type].remove(filepath)
-        self.history[history_type].insert(0, filepath)
-        if len(self.history[history_type]) > self.max_history:
-            self.history[history_type] = self.history[history_type][:self.max_history]
-        self.save_history()
-        self.update_history_display()
-    
-    def update_history_display(self):
-        self.import_listbox.clear()
-        for filepath in self.history["imported"]:
-            self.import_listbox.addItem(Path(filepath).name)
-        
-        self.generated_listbox.clear()
-        for filepath in self.history["generated"]:
-            self.generated_listbox.addItem(Path(filepath).name)
-    
-    def on_import_select(self, item):
-        idx = self.import_listbox.row(item)
-        if idx < len(self.history["imported"]):
-            filepath = self.history["imported"][idx]
-            self._preview_file(filepath)
-    
-    def on_generated_select(self, item):
-        idx = self.generated_listbox.row(item)
-        if idx < len(self.history["generated"]):
-            filepath = self.history["generated"][idx]
-            self._preview_file(filepath)
-    
-    def on_import_double_click(self, item):
-        idx = self.import_listbox.row(item)
-        if idx < len(self.history["imported"]):
-            filepath = self.history["imported"][idx]
-            self.load_file(filepath)
-    
-    def on_generated_double_click(self, item):
-        idx = self.generated_listbox.row(item)
-        if idx < len(self.history["generated"]):
-            filepath = self.history["generated"][idx]
-            self.open_file(filepath)
-    
-    def _preview_file(self, filepath):
-        if not os.path.exists(filepath):
-            return
-        
-        try:
-            with open(filepath, 'rb') as f:
-                raw_content = f.read(10000)
-            
-            detected = self.detect_encoding_and_newline(raw_content)
-            encoding = detected['encoding']
-            newline_char = detected['newline_char']
-            
-            content = raw_content.decode(encoding, errors='replace')
-            
-            lines = content.split(newline_char)
-            preview_lines = lines[:100]
-            
-            self.preview_text.clear()
-            self.preview_text.setPlainText(newline_char.join(preview_lines))
-            if len(lines) > 100:
-                cursor = self.preview_text.textCursor()
-                cursor.movePosition(cursor.MoveOperation.End)
-                cursor.insertText(f"\n\n... 共 {len(lines)} 行，仅显示前100行 ...")
-            
-            self.status_label.setText(f"预览: {Path(filepath).name} ({len(lines)} 行)")
-        except Exception as e:
-            self.preview_text.clear()
-            self.preview_text.setPlainText(f"预览失败: {str(e)}")
-    
-    def open_containing_folder(self):
-        import_selection = self.import_listbox.currentRow()
-        generated_selection = self.generated_listbox.currentRow()
-        
-        filepath = None
-        
-        if import_selection >= 0:
-            if import_selection < len(self.history["imported"]):
-                filepath = self.history["imported"][import_selection]
-        elif generated_selection >= 0:
-            if generated_selection < len(self.history["generated"]):
-                filepath = self.history["generated"][generated_selection]
-        
-        if filepath and os.path.exists(filepath):
-            folder_path = os.path.dirname(filepath)
-            os.startfile(folder_path)
+    def open_work_dir(self):
+        if os.path.exists(self.work_dir):
+            os.startfile(self.work_dir)
         else:
-            QMessageBox.information(self, "提示", "请先选择一个历史记录文件")
-    
-    def clear_history(self):
-        reply = QMessageBox.question(
-            self, "确认", "确定要清空所有历史记录吗？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
-            self.history = {"imported": [], "generated": []}
-            self.save_history()
-            self.update_history_display()
-            QMessageBox.information(self, "完成", "历史记录已清空")
-    
-    def open_file(self, filepath):
-        if os.path.exists(filepath):
-            os.startfile(filepath)
-        else:
-            QMessageBox.critical(self, "错误", f"文件不存在: {filepath}")
+            QMessageBox.information(self, "提示", "工作目录不存在")
     
     def import_file(self):
         filetypes = [
@@ -910,91 +1584,217 @@ class TextProcessorWindow(QMainWindow):
         )
         
         if filepath:
-            self.load_file(filepath)
+            self.add_file_to_list(filepath)
     
-    def load_file(self, filepath):
+    def import_multi_files(self):
+        filetypes = [
+            ("文本文件", "*.txt"),
+            ("CSV文件", "*.csv"),
+            ("所有文件", "*.*")
+        ]
+        
+        filepaths, _ = QFileDialog.getOpenFileNames(
+            self, "选择要处理的文件", "", ";;".join([f"{t[0]} ({t[1]})" for t in filetypes])
+        )
+        
+        for filepath in filepaths:
+            self.add_file_to_list(filepath)
+    
+    def add_file_to_list(self, filepath):
+        filepath = str(Path(filepath).resolve())
+        
+        for item in self.file_list:
+            if item.filepath == filepath:
+                return
+        
+        file_item = FileListItem(filepath)
+        if file_item.load():
+            self.file_list.append(file_item)
+            
+            list_item = QListWidgetItem(file_item.name)
+            list_item.setData(Qt.ItemDataRole.UserRole, file_item.filepath)
+            self.file_list_widget.addItem(list_item)
+            
+            self.update_file_info()
+            self.refresh_compare_file_list()
+    
+    def remove_selected_files(self):
+        selected_items = self.file_list_widget.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "提示", "请先选择要移除的文件")
+            return
+        
+        for item in selected_items:
+            filepath = item.data(Qt.ItemDataRole.UserRole)
+            self.file_list = [f for f in self.file_list if f.filepath != filepath]
+            self.file_list_widget.takeItem(self.file_list_widget.row(item))
+        
+        self.update_file_info()
+        self.refresh_compare_file_list()
+    
+    def clear_all_files(self):
+        if not self.file_list:
+            return
+        
+        reply = QMessageBox.question(
+            self, "确认", "确定要清空所有文件吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.file_list.clear()
+            self.file_list_widget.clear()
+            self.preview_text.clear()
+            self.current_file_item = None
+            self.update_file_info()
+            self.refresh_compare_file_list()
+    
+    def update_file_info(self):
+        self.file_count_label.setText(f"文件数: {len(self.file_list)}")
+        total_lines = sum(f.line_count() for f in self.file_list)
+        self.total_lines_label.setText(f"总行数: {total_lines}")
+    
+    def refresh_compare_file_list(self):
+        current_a = self.compare_file_a_combo.currentText()
+        current_b = self.compare_file_b_combo.currentText()
+        
+        self.compare_file_a_combo.clear()
+        self.compare_file_b_combo.clear()
+        
+        for item in self.file_list:
+            self.compare_file_a_combo.addItem(item.name, item.filepath)
+            self.compare_file_b_combo.addItem(item.name, item.filepath)
+        
+        if current_a:
+            index = self.compare_file_a_combo.findText(current_a)
+            if index >= 0:
+                self.compare_file_a_combo.setCurrentIndex(index)
+        if current_b:
+            index = self.compare_file_b_combo.findText(current_b)
+            if index >= 0:
+                self.compare_file_b_combo.setCurrentIndex(index)
+    
+    def on_file_select(self, item):
+        filepath = item.data(Qt.ItemDataRole.UserRole)
+        self.preview_file(filepath)
+    
+    def on_file_double_click(self, item):
+        filepath = item.data(Qt.ItemDataRole.UserRole)
+        if os.path.exists(filepath):
+            os.startfile(filepath)
+    
+    def preview_file(self, filepath):
+        if not os.path.exists(filepath):
+            return
+        
         try:
             with open(filepath, 'rb') as f:
-                raw_content = f.read()
+                raw_content = f.read(50000)
             
-            detected = self.detect_encoding_and_newline(raw_content)
-            encoding = detected['encoding']
-            newline_char = detected['newline_char']
-            newline_name = detected['newline_name']
+            file_item = None
+            for item in self.file_list:
+                if item.filepath == filepath:
+                    file_item = item
+                    break
             
-            content = raw_content.decode(encoding, errors='replace')
-            self.file_content = content.split(newline_char)
-            self.newline_char = newline_char
-            self.current_file = filepath
+            if not file_item:
+                file_item = FileListItem(filepath)
+                file_item.load()
             
-            self.add_import_history(filepath)
+            lines = file_item.lines[:200]
             
-            self._preview_file(filepath)
-            self.line_count_label.setText(f"行数: {len(self.file_content)}")
-            self.newline_label.setText(f"换行符: {newline_name}")
-            self.status_label.setText(f"已加载: {Path(filepath).name}")
+            self.preview_text.clear()
+            self.preview_text.setPlainText(file_item.newline_char.join(lines))
+            if len(file_item.lines) > 200:
+                cursor = self.preview_text.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                cursor.insertText(f"\n\n... 共 {len(file_item.lines)} 行，仅显示前200行 ...")
             
+            self.current_file_item = file_item
+            self.line_count_label.setText(f"行数: {len(file_item.lines)}")
+            self.status_label.setText(f"预览: {file_item.name}")
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"读取文件失败: {str(e)}")
+            self.preview_text.clear()
+            self.preview_text.setPlainText(f"预览失败: {str(e)}")
     
-    def detect_encoding_and_newline(self, raw_content):
-        if raw_content.startswith(b'\xef\xbb\xbf'):
-            encoding = 'utf-8-sig'
-        elif raw_content.startswith(b'\xff\xfe') or raw_content.startswith(b'\xfe\xff'):
-            encoding = 'utf-16'
-        else:
-            try:
-                raw_content.decode('utf-8')
-                encoding = 'utf-8'
-            except UnicodeDecodeError:
-                encoding = 'gbk'
+    def toggle_dedup_separator(self, state):
+        enabled = state == Qt.CheckState.Checked.value
+        self.dedup_separator_combo.setEnabled(enabled)
+        self.dedup_custom_separator.setEnabled(enabled)
         
-        crlf_count = raw_content.count(b'\r\n')
-        lf_count = raw_content.count(b'\n') - crlf_count
-        cr_count = raw_content.count(b'\r') - crlf_count
-        
-        if crlf_count > lf_count and crlf_count > cr_count:
-            newline_char = '\r\n'
-            newline_name = 'CRLF (Windows)'
-        elif lf_count > cr_count:
-            newline_char = '\n'
-            newline_name = 'LF (Unix/Linux)'
-        elif cr_count > 0:
-            newline_char = '\r'
-            newline_name = 'CR (Old Mac)'
-        else:
-            newline_char = '\n'
-            newline_name = 'LF (默认)'
-        
-        return {
-            'encoding': encoding,
-            'newline_char': newline_char,
-            'newline_name': newline_name
-        }
+        if not enabled:
+            self.dedup_param_check.setChecked(False)
     
-    def get_separator(self):
-        if self.separator_combo.currentText() == '其他':
-            return self.custom_separator.text()
-        elif self.separator_combo.currentText() == '\\t':
+    def toggle_dedup_param(self, state):
+        enabled = state == Qt.CheckState.Checked.value
+        
+        if enabled:
+            self.dedup_separator_check.setChecked(True)
+        
+        self.dedup_param_position.setEnabled(enabled)
+    
+    def toggle_compare_param(self, state):
+        enabled = state == Qt.CheckState.Checked.value
+        self.compare_separator_combo.setEnabled(enabled)
+        self.compare_custom_separator.setEnabled(enabled)
+        self.compare_col_spin.setEnabled(enabled)
+    
+    def select_export_columns(self):
+        dialog = ColumnSelectDialog(self, 100, self.export_columns)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            columns = dialog.get_columns()
+            self.export_columns = columns
+            if columns:
+                self.export_columns_display.setText(f"已选: {','.join(str(c) for c in columns)}")
+            else:
+                self.export_columns_display.setText("全部列")
+    
+    def get_dedup_separator(self):
+        if self.dedup_separator_combo.currentText() == '其他':
+            return self.dedup_custom_separator.text()
+        elif self.dedup_separator_combo.currentText() == '\\t':
             return '\t'
         else:
-            return self.separator_combo.currentText()
+            return self.dedup_separator_combo.currentText()
     
-    def get_dedup_key(self, line):
-        if not self.use_separator:
+    def get_export_input_separator(self):
+        if self.export_input_separator.currentText() == '其他':
+            return self.export_custom_input.text()
+        elif self.export_input_separator.currentText() == '\\t':
+            return '\t'
+        else:
+            return self.export_input_separator.currentText()
+    
+    def get_export_output_separator(self):
+        if self.export_output_separator.currentText() == '其他':
+            return self.export_custom_output.text()
+        elif self.export_output_separator.currentText() == '\\t':
+            return '\t'
+        else:
+            return self.export_output_separator.currentText()
+    
+    def get_compare_separator(self):
+        if self.compare_separator_combo.currentText() == '其他':
+            return self.compare_custom_separator.text()
+        elif self.compare_separator_combo.currentText() == '\\t':
+            return '\t'
+        else:
+            return self.compare_separator_combo.currentText()
+    
+    def get_dedup_key(self, line, use_separator, separator, use_param, param_pos):
+        if not use_separator:
             return line.strip()
         
-        separator = self.get_separator()
         if not separator:
             return line.strip()
         
         parts = line.split(separator)
         
-        if not self.use_specific_param:
+        if not use_param:
             return tuple(p.strip() for p in parts)
         
         try:
-            pos = int(self.param_position.text()) - 1
+            pos = int(param_pos) - 1
             if 0 <= pos < len(parts):
                 return parts[pos].strip()
             else:
@@ -1002,17 +1802,61 @@ class TextProcessorWindow(QMainWindow):
         except:
             return line.strip()
     
-    def process_deduplication(self):
-        if not self.file_content:
+    def save_output_file(self, content, suffix, base_name=None):
+        self.ensure_work_dir()
+        
+        if base_name and self.current_file_item:
+            original_name = Path(base_name).stem
+        elif self.current_file_item:
+            original_name = Path(self.current_file_item.name).stem
+        else:
+            original_name = "output"
+        
+        new_filename = f"{original_name}{suffix}.txt"
+        new_filepath = Path(self.work_dir) / new_filename
+        
+        counter = 1
+        while new_filepath.exists():
+            new_filename = f"{original_name}{suffix}_{counter}.txt"
+            new_filepath = Path(self.work_dir) / new_filename
+            counter += 1
+        
+        try:
+            with open(new_filepath, 'w', encoding='utf-8') as f:
+                f.write(content)
+            return str(new_filepath)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"保存文件失败: {str(e)}")
+            return None
+    
+    def execute_deduplication(self):
+        if not self.current_file_item and not self.file_list:
             QMessageBox.warning(self, "警告", "请先导入文件")
             return
+        
+        target_item = self.current_file_item
+        if not target_item and self.file_list:
+            target_item = self.file_list[0]
+        
+        if not target_item:
+            QMessageBox.warning(self, "警告", "请先选择文件")
+            return
+        
+        use_separator = self.dedup_separator_check.isChecked()
+        separator = self.get_dedup_separator()
+        use_param = self.dedup_param_check.isChecked()
+        param_pos = self.dedup_param_position.value()
         
         seen = set()
         unique_lines = []
         duplicate_count = 0
         
-        for line in self.file_content:
-            key = self.get_dedup_key(line)
+        for line in target_item.lines:
+            if not line.strip():
+                unique_lines.append(line)
+                continue
+            
+            key = self.get_dedup_key(line, use_separator, separator, use_param, param_pos)
             if key not in seen:
                 seen.add(key)
                 unique_lines.append(line)
@@ -1023,27 +1867,375 @@ class TextProcessorWindow(QMainWindow):
             QMessageBox.information(self, "提示", "没有发现重复行")
             return
         
-        original_path = Path(self.current_file)
-        suffix = self.output_suffix.text()
-        new_filename = f"{original_path.stem}{suffix}{original_path.suffix}"
-        new_filepath = original_path.parent / new_filename
+        suffix = self.dedup_output_suffix.text() or "_去重复"
+        content = target_item.newline_char.join(unique_lines)
+        if unique_lines and not unique_lines[-1].endswith(target_item.newline_char):
+            content += target_item.newline_char
         
-        try:
-            with open(new_filepath, 'w', encoding='utf-8') as f:
-                f.write(self.newline_char.join(unique_lines))
-                if unique_lines and not unique_lines[-1].endswith(self.newline_char):
-                    f.write(self.newline_char)
-            
-            self.add_generated_history(str(new_filepath))
-            
-            msg = f"去重完成！\n\n原始行数: {len(self.file_content)}\n去重后行数: {len(unique_lines)}\n删除重复行: {duplicate_count}\n\n文件已保存至:\n{new_filepath}"
+        output_path = self.save_output_file(content, suffix, target_item.filepath)
+        
+        if output_path:
+            msg = f"去重完成！\n\n原始行数: {len(target_item.lines)}\n去重后行数: {len(unique_lines)}\n删除重复行: {duplicate_count}\n\n文件已保存至:\n{output_path}"
             QMessageBox.information(self, "完成", msg)
+            self.status_label.setText(f"已生成: {Path(output_path).name}")
+    
+    def execute_export(self):
+        if not self.current_file_item and not self.file_list:
+            QMessageBox.warning(self, "警告", "请先导入文件")
+            return
+        
+        target_item = self.current_file_item
+        if not target_item and self.file_list:
+            target_item = self.file_list[0]
+        
+        if not target_item:
+            QMessageBox.warning(self, "警告", "请先选择文件")
+            return
+        
+        input_separator = self.get_export_input_separator()
+        output_separator = self.get_export_output_separator()
+        columns = self.export_columns
+        
+        if not input_separator:
+            QMessageBox.warning(self, "警告", "请指定输入分隔符")
+            return
+        
+        result_lines = []
+        max_col = 0
+        
+        for line in target_item.lines:
+            if not line.strip():
+                result_lines.append(line)
+                continue
             
-            self._preview_file(str(new_filepath))
-            self.status_label.setText(f"已生成: {new_filename}")
+            parts = line.split(input_separator)
+            max_col = max(max_col, len(parts))
             
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"保存文件失败: {str(e)}")
+            if columns:
+                selected_parts = []
+                for col in columns:
+                    idx = col - 1
+                    if 0 <= idx < len(parts):
+                        selected_parts.append(parts[idx].strip())
+                    else:
+                        selected_parts.append("")
+                result_lines.append(output_separator.join(selected_parts))
+            else:
+                result_lines.append(output_separator.join([p.strip() for p in parts]))
+        
+        suffix = self.export_output_suffix.text() or "_导出"
+        content = target_item.newline_char.join(result_lines)
+        if result_lines and not result_lines[-1].endswith(target_item.newline_char):
+            content += target_item.newline_char
+        
+        output_path = self.save_output_file(content, suffix, target_item.filepath)
+        
+        if output_path:
+            col_info = f"已选列: {','.join(str(c) for c in columns)}" if columns else "全部列"
+            msg = f"导出完成！\n\n总行数: {len(target_item.lines)}\n{col_info}\n输入分隔符: {repr(input_separator)}\n输出分隔符: {repr(output_separator)}\n\n文件已保存至:\n{output_path}"
+            QMessageBox.information(self, "完成", msg)
+            self.status_label.setText(f"已生成: {Path(output_path).name}")
+    
+    def execute_extract(self):
+        if not self.current_file_item and not self.file_list:
+            QMessageBox.warning(self, "警告", "请先导入文件")
+            return
+        
+        target_item = self.current_file_item
+        if not target_item and self.file_list:
+            target_item = self.file_list[0]
+        
+        if not target_item:
+            QMessageBox.warning(self, "警告", "请先选择文件")
+            return
+        
+        is_keyword = self.extract_keyword_radio.isChecked()
+        is_regex = self.extract_regex_radio.isChecked()
+        is_rule = self.extract_rule_radio.isChecked()
+        
+        case_sensitive = self.case_sensitive_check.isChecked()
+        invert = self.invert_check.isChecked()
+        
+        result_lines = []
+        match_count = 0
+        
+        if is_keyword:
+            keyword_text = self.keyword_edit.text().strip()
+            if not keyword_text:
+                QMessageBox.warning(self, "警告", "请输入关键词")
+                return
+            
+            keywords = [k.strip() for k in keyword_text.split(',') if k.strip()]
+            
+            for line in target_item.lines:
+                matched = False
+                for kw in keywords:
+                    if case_sensitive:
+                        if kw in line:
+                            matched = True
+                            break
+                    else:
+                        if kw.lower() in line.lower():
+                            matched = True
+                            break
+                
+                if (matched and not invert) or (not matched and invert):
+                    result_lines.append(line)
+                    match_count += 1
+        
+        elif is_regex:
+            pattern_text = self.regex_edit.text().strip()
+            if not pattern_text:
+                QMessageBox.warning(self, "警告", "请输入正则表达式")
+                return
+            
+            try:
+                flags = 0 if case_sensitive else re.IGNORECASE
+                pattern = re.compile(pattern_text, flags)
+                
+                for line in target_item.lines:
+                    matched = bool(pattern.search(line))
+                    if (matched and not invert) or (not matched and invert):
+                        result_lines.append(line)
+                        match_count += 1
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"正则表达式错误: {str(e)}")
+                return
+        
+        elif is_rule:
+            rule_text = self.keyword_edit.text().strip()
+            if not rule_text:
+                QMessageBox.warning(self, "警告", "请输入匹配规则（关键词）")
+                return
+            
+            rules = [r.strip() for r in rule_text.split(',') if r.strip()]
+            
+            for line in target_item.lines:
+                matched = False
+                for rule in rules:
+                    if case_sensitive:
+                        if rule in line:
+                            matched = True
+                            break
+                    else:
+                        if rule.lower() in line.lower():
+                            matched = True
+                            break
+                
+                if (matched and not invert) or (not matched and invert):
+                    result_lines.append(line)
+                    match_count += 1
+        
+        if match_count == 0:
+            QMessageBox.information(self, "提示", "没有找到匹配的行")
+            return
+        
+        suffix = self.extract_output_suffix.text() or "_提取"
+        content = target_item.newline_char.join(result_lines)
+        if result_lines and not result_lines[-1].endswith(target_item.newline_char):
+            content += target_item.newline_char
+        
+        output_path = self.save_output_file(content, suffix, target_item.filepath)
+        
+        if output_path:
+            mode_text = "关键词" if is_keyword else ("正则" if is_regex else "规则匹配")
+            msg = f"提取完成！\n\n原始行数: {len(target_item.lines)}\n提取行数: {match_count}\n提取模式: {mode_text}\n\n文件已保存至:\n{output_path}"
+            QMessageBox.information(self, "完成", msg)
+            self.status_label.setText(f"已生成: {Path(output_path).name}")
+    
+    def execute_split(self):
+        if not self.current_file_item and not self.file_list:
+            QMessageBox.warning(self, "警告", "请先导入文件")
+            return
+        
+        target_item = self.current_file_item
+        if not target_item and self.file_list:
+            target_item = self.file_list[0]
+        
+        if not target_item:
+            QMessageBox.warning(self, "警告", "请先选择文件")
+            return
+        
+        lines_per_file = self.split_lines_spin.value()
+        prefix = self.split_prefix_edit.text() or "_分割文本"
+        
+        total_lines = len(target_item.lines)
+        file_count = (total_lines + lines_per_file - 1) // lines_per_file
+        
+        if file_count <= 1:
+            QMessageBox.information(self, "提示", f"文件行数不足，无需分割\n总行数: {total_lines}\n每文件行数: {lines_per_file}")
+            return
+        
+        self.ensure_work_dir()
+        original_name = Path(target_item.name).stem
+        saved_files = []
+        
+        for i in range(file_count):
+            start = i * lines_per_file
+            end = min((i + 1) * lines_per_file, total_lines)
+            chunk_lines = target_item.lines[start:end]
+            
+            content = target_item.newline_char.join(chunk_lines)
+            if chunk_lines and not chunk_lines[-1].endswith(target_item.newline_char):
+                content += target_item.newline_char
+            
+            new_filename = f"{original_name}{prefix}{i + 1}.txt"
+            new_filepath = Path(self.work_dir) / new_filename
+            
+            counter = 1
+            while new_filepath.exists():
+                new_filename = f"{original_name}{prefix}{i + 1}_{counter}.txt"
+                new_filepath = Path(self.work_dir) / new_filename
+                counter += 1
+            
+            try:
+                with open(new_filepath, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                saved_files.append(str(new_filepath))
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"保存文件失败: {str(e)}")
+                return
+        
+        if saved_files:
+            msg = f"分割完成！\n\n原始行数: {total_lines}\n每文件行数: {lines_per_file}\n生成文件数: {file_count}\n\n文件已保存至工作目录"
+            QMessageBox.information(self, "完成", msg)
+            self.status_label.setText(f"已生成 {file_count} 个分割文件")
+    
+    def execute_merge(self):
+        selected_items = self.file_list_widget.selectedItems()
+        if len(selected_items) < 2:
+            QMessageBox.warning(self, "警告", "请至少选择2个文件进行合并\n（按住Ctrl或Shift可多选）")
+            return
+        
+        ordered_filepaths = []
+        for i in range(self.file_list_widget.count()):
+            item = self.file_list_widget.item(i)
+            if item.isSelected():
+                ordered_filepaths.append(item.data(Qt.ItemDataRole.UserRole))
+        
+        if len(ordered_filepaths) < 2:
+            QMessageBox.warning(self, "警告", "请至少选择2个文件进行合并")
+            return
+        
+        output_name = self.merge_filename_edit.text().strip() or "合并结果"
+        
+        merged_lines = []
+        total_files = len(ordered_filepaths)
+        total_lines = 0
+        
+        for filepath in ordered_filepaths:
+            for item in self.file_list:
+                if item.filepath == filepath:
+                    merged_lines.extend(item.lines)
+                    total_lines += len(item.lines)
+                    break
+        
+        if not merged_lines:
+            QMessageBox.warning(self, "警告", "没有内容可合并")
+            return
+        
+        newline_char = '\n'
+        if self.file_list:
+            newline_char = self.file_list[0].newline_char
+        
+        content = newline_char.join(merged_lines)
+        if merged_lines and not merged_lines[-1].endswith(newline_char):
+            content += newline_char
+        
+        output_path = self.save_output_file(content, "", output_name)
+        
+        if output_path:
+            msg = f"合并完成！\n\n合并文件数: {total_files}\n总行数: {total_lines}\n\n文件已保存至:\n{output_path}"
+            QMessageBox.information(self, "完成", msg)
+            self.status_label.setText(f"已生成: {Path(output_path).name}")
+    
+    def execute_compare(self):
+        idx_a = self.compare_file_a_combo.currentIndex()
+        idx_b = self.compare_file_b_combo.currentIndex()
+        
+        if idx_a < 0 or idx_b < 0:
+            QMessageBox.warning(self, "警告", "请选择文件A和文件B")
+            return
+        
+        filepath_a = self.compare_file_a_combo.currentData()
+        filepath_b = self.compare_file_b_combo.currentData()
+        
+        if filepath_a == filepath_b:
+            QMessageBox.warning(self, "警告", "文件A和文件B不能是同一个文件")
+            return
+        
+        file_a = None
+        file_b = None
+        
+        for item in self.file_list:
+            if item.filepath == filepath_a:
+                file_a = item
+            if item.filepath == filepath_b:
+                file_b = item
+        
+        if not file_a or not file_b:
+            QMessageBox.warning(self, "警告", "请确保文件已正确加载")
+            return
+        
+        use_param_b = self.compare_use_param_check.isChecked()
+        separator_b = self.get_compare_separator()
+        col_pos_b = self.compare_col_spin.value()
+        
+        is_remove_mode = self.compare_remove_radio.isChecked()
+        
+        set_b = set()
+        
+        for line in file_b.lines:
+            if not line.strip():
+                continue
+            
+            if use_param_b:
+                key = self.get_dedup_key(line, True, separator_b, True, col_pos_b)
+            else:
+                key = line.strip()
+            set_b.add(key)
+        
+        result_lines = []
+        match_count = 0
+        
+        for line in file_a.lines:
+            if not line.strip():
+                if not is_remove_mode:
+                    result_lines.append(line)
+                continue
+            
+            key = line.strip()
+            in_b = key in set_b
+            
+            if is_remove_mode:
+                if not in_b:
+                    result_lines.append(line)
+                    match_count += 1
+            else:
+                if in_b:
+                    result_lines.append(line)
+                    match_count += 1
+        
+        if match_count == 0:
+            mode_text = "去除重复" if is_remove_mode else "提取共有"
+            QMessageBox.information(self, "提示", f"没有找到匹配的行\n模式: {mode_text}")
+            return
+        
+        suffix = self.compare_output_suffix.text() or "_对比结果"
+        mode_suffix = "_去除重复" if is_remove_mode else "_共有数据"
+        full_suffix = suffix + mode_suffix
+        
+        content = file_a.newline_char.join(result_lines)
+        if result_lines and not result_lines[-1].endswith(file_a.newline_char):
+            content += file_a.newline_char
+        
+        output_path = self.save_output_file(content, full_suffix, file_a.filepath)
+        
+        if output_path:
+            mode_text = "去除A中含B的重复数据 (A - B)" if is_remove_mode else "提取A和B的共有数据 (A ∩ B)"
+            msg = f"对比完成！\n\n模式: {mode_text}\n文件A行数: {len(file_a.lines)}\n文件B行数: {len(file_b.lines)}\n结果行数: {match_count}\n\n文件已保存至:\n{output_path}"
+            QMessageBox.information(self, "完成", msg)
+            self.status_label.setText(f"已生成: {Path(output_path).name}")
 
 
 def main():
