@@ -7,7 +7,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QGroupBox, QPushButton, QLabel, QCheckBox, QComboBox,
     QLineEdit, QTabWidget, QListWidget, QTextEdit, QStatusBar, QFrame,
-    QFileDialog, QMessageBox, QSpacerItem, QSizePolicy
+    QFileDialog, QMessageBox, QSpacerItem, QSizePolicy, QToolBar,
+    QMenu, QMenuBar
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont, QIcon, QAction, QColor, QPalette
@@ -129,8 +130,8 @@ class StyledButton(QPushButton):
         self.button_type = button_type
         if icon:
             self.setIcon(icon)
-            self.setIconSize(QSize(20, 20))
-        self.setMinimumHeight(36)
+            self.setIconSize(QSize(16, 16))
+        self.setMinimumHeight(28)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
 
@@ -146,12 +147,12 @@ class CardWidget(QFrame):
         
         if title:
             header = QFrame()
-            header.setFixedHeight(36)
+            header.setFixedHeight(32)
             header_layout = QHBoxLayout(header)
             header_layout.setContentsMargins(12, 0, 12, 0)
             
             title_label = QLabel(title)
-            title_label.setFont(QFont("Microsoft YaHei UI", 10, QFont.Weight.Bold))
+            title_label.setFont(QFont("Microsoft YaHei UI", 9, QFont.Weight.Bold))
             header_layout.addWidget(title_label)
             
             self.layout.addWidget(header)
@@ -163,7 +164,8 @@ class CardWidget(QFrame):
         
         self.content_widget = QWidget()
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(15, 15, 15, 15)
+        self.content_layout.setContentsMargins(12, 12, 12, 12)
+        self.content_layout.setSpacing(8)
         self.layout.addWidget(self.content_widget)
     
     def add_widget(self, widget):
@@ -177,8 +179,8 @@ class TextProcessorWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("文本处理工具")
-        self.setMinimumSize(900, 600)
-        self.resize(1100, 750)
+        self.setMinimumSize(850, 550)
+        self.resize(1000, 650)
         
         self.current_theme = "system"
         self.actual_theme = ThemeManager.detect_system_theme()
@@ -195,86 +197,85 @@ class TextProcessorWindow(QMainWindow):
         self.use_specific_param = False
         
         self.load_history()
+        self.setup_menu_bar()
         self.setup_ui()
         self.apply_theme(self.actual_theme)
+    
+    def setup_menu_bar(self):
+        menubar = self.menuBar()
+        
+        file_menu = menubar.addMenu("文件(&F)")
+        
+        import_action = QAction("导入文件...", self)
+        import_action.triggered.connect(self.import_file)
+        file_menu.addAction(import_action)
+        
+        file_menu.addSeparator()
+        
+        exit_action = QAction("退出", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        view_menu = menubar.addMenu("视图(&V)")
+        
+        theme_menu = view_menu.addMenu("主题")
+        
+        self.light_action = QAction("浅色", self, checkable=True)
+        self.light_action.triggered.connect(lambda: self.set_theme("light"))
+        theme_menu.addAction(self.light_action)
+        
+        self.dark_action = QAction("深色", self, checkable=True)
+        self.dark_action.triggered.connect(lambda: self.set_theme("dark"))
+        theme_menu.addAction(self.dark_action)
+        
+        self.system_action = QAction("跟随系统", self, checkable=True)
+        self.system_action.triggered.connect(lambda: self.set_theme("system"))
+        theme_menu.addAction(self.system_action)
+        
+        self.update_theme_menu()
+    
+    def update_theme_menu(self):
+        self.light_action.setChecked(self.current_theme == "light")
+        self.dark_action.setChecked(self.current_theme == "dark")
+        self.system_action.setChecked(self.current_theme == "system")
     
     def setup_ui(self):
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(15, 15, 15, 15)
-        main_layout.setSpacing(15)
-        
-        top_bar = QWidget()
-        top_bar_layout = QHBoxLayout(top_bar)
-        top_bar_layout.setContentsMargins(0, 0, 0, 0)
-        
-        title_label = QLabel("文本处理工具")
-        title_label.setFont(QFont("Microsoft YaHei UI", 16, QFont.Weight.Bold))
-        top_bar_layout.addWidget(title_label)
-        
-        top_bar_layout.addStretch()
-        
-        theme_label = QLabel("主题:")
-        theme_label.setFont(QFont("Microsoft YaHei UI", 9))
-        top_bar_layout.addWidget(theme_label)
-        
-        self.theme_light_btn = StyledButton("浅色", button_type="secondary")
-        self.theme_light_btn.setMinimumWidth(60)
-        self.theme_light_btn.setMinimumHeight(28)
-        self.theme_light_btn.clicked.connect(lambda: self.set_theme("light"))
-        top_bar_layout.addWidget(self.theme_light_btn)
-        
-        self.theme_dark_btn = StyledButton("深色", button_type="secondary")
-        self.theme_dark_btn.setMinimumWidth(60)
-        self.theme_dark_btn.setMinimumHeight(28)
-        self.theme_dark_btn.clicked.connect(lambda: self.set_theme("dark"))
-        top_bar_layout.addWidget(self.theme_dark_btn)
-        
-        self.theme_system_btn = StyledButton("跟随系统", button_type="secondary")
-        self.theme_system_btn.setMinimumWidth(80)
-        self.theme_system_btn.setMinimumHeight(28)
-        self.theme_system_btn.clicked.connect(lambda: self.set_theme("system"))
-        top_bar_layout.addWidget(self.theme_system_btn)
-        
-        main_layout.addWidget(top_bar)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
         
         content_splitter = QSplitter(Qt.Orientation.Horizontal)
         
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(10)
+        left_layout.setSpacing(8)
         
-        actions_card = CardWidget("操作")
+        toolbar_card = CardWidget("工具栏")
+        
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setSpacing(6)
         
         self.import_btn = StyledButton("导入文件", button_type="primary")
-        self.import_btn.setMinimumHeight(40)
         self.import_btn.clicked.connect(self.import_file)
-        actions_card.add_widget(self.import_btn)
+        toolbar_layout.addWidget(self.import_btn)
         
-        self.process_btn = StyledButton("去重处理", button_type="primary")
-        self.process_btn.setMinimumHeight(40)
-        self.process_btn.clicked.connect(self.process_deduplication)
-        actions_card.add_widget(self.process_btn)
-        
-        separator1 = QFrame()
-        separator1.setFrameShape(QFrame.Shape.HLine)
-        separator1.setFixedHeight(1)
-        actions_card.add_widget(separator1)
+        toolbar_layout.addStretch()
         
         self.open_folder_btn = StyledButton("打开目录", button_type="secondary")
-        self.open_folder_btn.setMinimumHeight(32)
         self.open_folder_btn.clicked.connect(self.open_containing_folder)
-        actions_card.add_widget(self.open_folder_btn)
+        toolbar_layout.addWidget(self.open_folder_btn)
         
         self.clear_history_btn = StyledButton("清空历史", button_type="secondary")
-        self.clear_history_btn.setMinimumHeight(32)
         self.clear_history_btn.clicked.connect(self.clear_history)
-        actions_card.add_widget(self.clear_history_btn)
+        toolbar_layout.addWidget(self.clear_history_btn)
         
-        left_layout.addWidget(actions_card)
+        toolbar_card.add_layout(toolbar_layout)
+        
+        left_layout.addWidget(toolbar_card)
         
         history_card = CardWidget("历史记录")
         
@@ -282,7 +283,7 @@ class TextProcessorWindow(QMainWindow):
         
         import_tab = QWidget()
         import_layout = QVBoxLayout(import_tab)
-        import_layout.setContentsMargins(8, 8, 8, 8)
+        import_layout.setContentsMargins(6, 6, 6, 6)
         
         self.import_listbox = QListWidget()
         self.import_listbox.itemClicked.connect(self.on_import_select)
@@ -293,7 +294,7 @@ class TextProcessorWindow(QMainWindow):
         
         generated_tab = QWidget()
         generated_layout = QVBoxLayout(generated_tab)
-        generated_layout.setContentsMargins(8, 8, 8, 8)
+        generated_layout.setContentsMargins(6, 6, 6, 6)
         
         self.generated_listbox = QListWidget()
         self.generated_listbox.itemClicked.connect(self.on_generated_select)
@@ -311,67 +312,68 @@ class TextProcessorWindow(QMainWindow):
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
+        right_layout.setSpacing(8)
         
         config_card = CardWidget("去重配置")
         
-        self.separator_check = QCheckBox("使用分隔符分割行进行比较")
-        self.separator_check.stateChanged.connect(self.toggle_separator_options)
-        config_card.add_widget(self.separator_check)
+        row1_layout = QHBoxLayout()
+        row1_layout.setSpacing(10)
         
-        separator_row = QHBoxLayout()
+        self.separator_check = QCheckBox("分隔符分割")
+        self.separator_check.stateChanged.connect(self.toggle_separator_options)
+        row1_layout.addWidget(self.separator_check)
         
         separator_label = QLabel("分隔符:")
-        separator_row.addWidget(separator_label)
+        row1_layout.addWidget(separator_label)
         
         self.separator_combo = QComboBox()
         self.separator_combo.addItems([',', ';', '\\t', '|', ' ', '其他'])
         self.separator_combo.setEnabled(False)
-        self.separator_combo.setMinimumWidth(80)
-        separator_row.addWidget(self.separator_combo)
+        self.separator_combo.setMaximumWidth(70)
+        row1_layout.addWidget(self.separator_combo)
         
         custom_label = QLabel("自定义:")
-        separator_row.addWidget(custom_label)
+        row1_layout.addWidget(custom_label)
         
         self.custom_separator = QLineEdit()
         self.custom_separator.setEnabled(False)
-        self.custom_separator.setMaximumWidth(80)
-        separator_row.addWidget(self.custom_separator)
+        self.custom_separator.setMaximumWidth(60)
+        row1_layout.addWidget(self.custom_separator)
         
-        separator_row.addStretch()
+        row1_layout.addStretch()
         
-        config_card.add_layout(separator_row)
+        config_card.add_layout(row1_layout)
         
-        self.param_check = QCheckBox("仅根据指定列参数去重")
+        row2_layout = QHBoxLayout()
+        row2_layout.setSpacing(10)
+        
+        self.param_check = QCheckBox("指定列参数")
         self.param_check.stateChanged.connect(self.toggle_param_options)
-        config_card.add_widget(self.param_check)
+        row2_layout.addWidget(self.param_check)
         
-        param_row = QHBoxLayout()
-        
-        param_label = QLabel("参数位置 (从1开始):")
-        param_row.addWidget(param_label)
+        param_label = QLabel("参数位置:")
+        row2_layout.addWidget(param_label)
         
         self.param_position = QLineEdit("1")
         self.param_position.setEnabled(False)
-        self.param_position.setMaximumWidth(60)
-        param_row.addWidget(self.param_position)
+        self.param_position.setMaximumWidth(50)
+        row2_layout.addWidget(self.param_position)
         
-        param_row.addStretch()
-        
-        config_card.add_layout(param_row)
-        
-        suffix_row = QHBoxLayout()
-        
-        suffix_label = QLabel("输出文件名后缀:")
-        suffix_row.addWidget(suffix_label)
+        suffix_label = QLabel("输出后缀:")
+        row2_layout.addWidget(suffix_label)
         
         self.output_suffix = QLineEdit("_去重复")
-        self.output_suffix.setMaximumWidth(120)
-        suffix_row.addWidget(self.output_suffix)
+        self.output_suffix.setMaximumWidth(100)
+        row2_layout.addWidget(self.output_suffix)
         
-        suffix_row.addStretch()
+        row2_layout.addStretch()
         
-        config_card.add_layout(suffix_row)
+        self.process_btn = StyledButton("去重处理", button_type="primary")
+        self.process_btn.setMinimumWidth(90)
+        self.process_btn.clicked.connect(self.process_deduplication)
+        row2_layout.addWidget(self.process_btn)
+        
+        config_card.add_layout(row2_layout)
         
         right_layout.addWidget(config_card)
         
@@ -386,7 +388,7 @@ class TextProcessorWindow(QMainWindow):
         right_layout.addWidget(preview_card, stretch=1)
         
         content_splitter.addWidget(right_panel)
-        content_splitter.setSizes([300, 800])
+        content_splitter.setSizes([280, 720])
         
         main_layout.addWidget(content_splitter, stretch=1)
         
@@ -410,7 +412,7 @@ class TextProcessorWindow(QMainWindow):
         from PyQt6.QtCore import Qt, QRectF
         
         def create_icon(icon_type):
-            pixmap = QPixmap(20, 20)
+            pixmap = QPixmap(16, 16)
             pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -424,26 +426,26 @@ class TextProcessorWindow(QMainWindow):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             
             if icon_type == "folder":
-                painter.drawRoundedRect(QRectF(2, 6, 16, 12), 2, 2)
-                painter.drawRect(QRectF(2, 3, 8, 5))
-                painter.drawLine(10, 3, 18, 3)
-                painter.drawLine(18, 3, 18, 6)
+                painter.drawRoundedRect(QRectF(2, 5, 12, 9), 1, 1)
+                painter.drawRect(QRectF(2, 3, 6, 4))
+                painter.drawLine(8, 3, 14, 3)
+                painter.drawLine(14, 3, 14, 5)
             elif icon_type == "reload":
-                painter.drawArc(QRectF(3, 3, 14, 14), 30 * 16, 300 * 16)
-                painter.drawLine(16, 6, 18, 3)
-                painter.drawLine(16, 6, 13, 8)
+                painter.drawArc(QRectF(2, 2, 12, 12), 30 * 16, 300 * 16)
+                painter.drawLine(13, 5, 15, 3)
+                painter.drawLine(13, 5, 11, 6)
             elif icon_type == "open":
-                painter.drawRoundedRect(QRectF(2, 4, 16, 12), 2, 2)
-                painter.drawLine(2, 8, 18, 8)
-                painter.drawLine(6, 8, 8, 11)
-                painter.drawLine(10, 8, 14, 8)
-                painter.drawLine(14, 8, 12, 11)
+                painter.drawRoundedRect(QRectF(2, 3, 12, 10), 1, 1)
+                painter.drawLine(2, 8, 14, 8)
+                painter.drawLine(5, 8, 6, 10)
+                painter.drawLine(8, 8, 11, 8)
+                painter.drawLine(11, 8, 10, 10)
             elif icon_type == "trash":
-                painter.drawRoundedRect(QRectF(5, 2, 10, 16), 2, 2)
-                painter.drawLine(2, 4, 18, 4)
-                painter.drawLine(7, 6, 7, 14)
-                painter.drawLine(10, 6, 10, 14)
-                painter.drawLine(13, 6, 13, 14)
+                painter.drawRoundedRect(QRectF(4, 2, 8, 12), 1, 1)
+                painter.drawLine(1, 4, 15, 4)
+                painter.drawLine(6, 5, 6, 11)
+                painter.drawLine(8, 5, 8, 11)
+                painter.drawLine(10, 5, 10, 11)
             
             painter.end()
             return QIcon(pixmap)
@@ -478,6 +480,7 @@ class TextProcessorWindow(QMainWindow):
         
         self.update_history_display()
         self.update_styles()
+        self.setup_icons()
     
     def update_styles(self):
         primary_bg = self.theme_colors['button_primary']
@@ -513,10 +516,39 @@ class TextProcessorWindow(QMainWindow):
                 font-family: "Microsoft YaHei UI";
                 font-size: 9pt;
             }}
+            QMenuBar {{
+                background-color: {self.theme_colors['header_bg']};
+                color: {self.theme_colors['header_fg']};
+                border-bottom: 1px solid {card_border};
+            }}
+            QMenuBar::item {{
+                background-color: transparent;
+                padding: 5px 12px;
+            }}
+            QMenuBar::item:selected {{
+                background-color: {primary_bg};
+                color: {primary_text};
+            }}
+            QMenu {{
+                background-color: {self.theme_colors['card_bg']};
+                color: {self.theme_colors['fg']};
+                border: 1px solid {card_border};
+            }}
+            QMenu::item {{
+                padding: 6px 30px;
+            }}
+            QMenu::item:selected {{
+                background-color: {primary_bg};
+                color: {primary_text};
+            }}
+            QMenu::item:checked {{
+                background-color: {primary_bg};
+                color: {primary_text};
+            }}
             CardWidget {{
                 background-color: {self.theme_colors['card_bg']};
                 border: 1px solid {card_border};
-                border-radius: 6px;
+                border-radius: 4px;
             }}
             CardWidget QLabel {{
                 background-color: transparent;
@@ -534,8 +566,8 @@ class TextProcessorWindow(QMainWindow):
                 background-color: transparent;
             }}
             QPushButton {{
-                border-radius: 6px;
-                padding: 8px 16px;
+                border-radius: 4px;
+                padding: 5px 12px;
                 font-weight: normal;
             }}
             QPushButton:hover {{
@@ -567,13 +599,13 @@ class TextProcessorWindow(QMainWindow):
             }}
             QCheckBox {{
                 color: {self.theme_colors['fg']};
-                spacing: 8px;
+                spacing: 6px;
             }}
             QCheckBox::indicator {{
-                width: 16px;
-                height: 16px;
+                width: 14px;
+                height: 14px;
                 border: 1px solid {entry_border};
-                border-radius: 3px;
+                border-radius: 2px;
                 background-color: {entry_bg};
             }}
             QCheckBox::indicator:checked {{
@@ -584,16 +616,16 @@ class TextProcessorWindow(QMainWindow):
                 background-color: {entry_bg};
                 color: {entry_fg};
                 border: 1px solid {entry_border};
-                border-radius: 4px;
-                padding: 5px 10px;
-                min-height: 20px;
+                border-radius: 3px;
+                padding: 4px 8px;
+                min-height: 16px;
             }}
             QComboBox:hover {{
                 border-color: {entry_focus};
             }}
             QComboBox::drop-down {{
                 border: none;
-                width: 20px;
+                width: 16px;
             }}
             QComboBox QAbstractItemView {{
                 background-color: {entry_bg};
@@ -605,8 +637,8 @@ class TextProcessorWindow(QMainWindow):
                 background-color: {entry_bg};
                 color: {entry_fg};
                 border: 1px solid {entry_border};
-                border-radius: 4px;
-                padding: 5px 8px;
+                border-radius: 3px;
+                padding: 4px 6px;
                 selection-background-color: {self.theme_colors['select_bg']};
                 selection-color: {self.theme_colors['select_fg']};
             }}
@@ -621,11 +653,11 @@ class TextProcessorWindow(QMainWindow):
                 background-color: {listbox_bg};
                 color: {listbox_fg};
                 border: 1px solid {card_border};
-                border-radius: 4px;
+                border-radius: 3px;
             }}
             QListWidget::item {{
-                padding: 5px;
-                border-radius: 3px;
+                padding: 4px;
+                border-radius: 2px;
             }}
             QListWidget::item:selected {{
                 background-color: {listbox_select_bg};
@@ -638,20 +670,20 @@ class TextProcessorWindow(QMainWindow):
                 background-color: {self.theme_colors['text_bg']};
                 color: {self.theme_colors['text_fg']};
                 border: 1px solid {card_border};
-                border-radius: 4px;
+                border-radius: 3px;
             }}
             QTabWidget::pane {{
                 border: 1px solid {card_border};
-                border-radius: 4px;
+                border-radius: 3px;
                 background-color: {self.theme_colors['card_bg']};
             }}
             QTabBar::tab {{
                 background-color: {self.theme_colors['header_bg']};
                 color: {self.theme_colors['header_fg']};
-                padding: 8px 15px;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                margin-right: 2px;
+                padding: 6px 12px;
+                border-top-left-radius: 3px;
+                border-top-right-radius: 3px;
+                margin-right: 1px;
             }}
             QTabBar::tab:selected {{
                 background-color: {self.theme_colors['card_bg']};
@@ -675,13 +707,13 @@ class TextProcessorWindow(QMainWindow):
             }}
             QScrollBar:vertical {{
                 background-color: {self.theme_colors['scrollbar_bg']};
-                width: 12px;
-                border-radius: 6px;
+                width: 10px;
+                border-radius: 5px;
             }}
             QScrollBar::handle:vertical {{
                 background-color: {self.theme_colors['scrollbar_thumb']};
-                min-height: 30px;
-                border-radius: 6px;
+                min-height: 25px;
+                border-radius: 5px;
                 margin: 2px;
             }}
             QScrollBar::handle:vertical:hover {{
@@ -692,13 +724,13 @@ class TextProcessorWindow(QMainWindow):
             }}
             QScrollBar:horizontal {{
                 background-color: {self.theme_colors['scrollbar_bg']};
-                height: 12px;
-                border-radius: 6px;
+                height: 10px;
+                border-radius: 5px;
             }}
             QScrollBar::handle:horizontal {{
                 background-color: {self.theme_colors['scrollbar_thumb']};
-                min-width: 30px;
-                border-radius: 6px;
+                min-width: 25px;
+                border-radius: 5px;
                 margin: 2px;
             }}
             QScrollBar::handle:horizontal:hover {{
@@ -716,6 +748,7 @@ class TextProcessorWindow(QMainWindow):
         else:
             self.actual_theme = theme
         self.apply_theme(self.actual_theme)
+        self.update_theme_menu()
     
     def toggle_separator_options(self, state):
         enabled = state == Qt.CheckState.Checked.value
