@@ -518,31 +518,21 @@ class TextProcessorWindow(QMainWindow):
         toolbar_layout.setSpacing(6)
         
         self.import_btn = StyledButton("导入文件", button_type="primary")
-        self.import_btn.clicked.connect(self.import_file)
+        self.import_btn.clicked.connect(self.import_multi_files)
         toolbar_layout.addWidget(self.import_btn)
         
-        self.import_multi_btn = StyledButton("批量导入", button_type="primary")
-        self.import_multi_btn.clicked.connect(self.import_multi_files)
-        toolbar_layout.addWidget(self.import_multi_btn)
-        
         toolbar_layout.addStretch()
-        
-        self.remove_btn = StyledButton("移除", button_type="secondary")
-        self.remove_btn.clicked.connect(self.remove_selected_files)
-        toolbar_layout.addWidget(self.remove_btn)
-        
-        self.clear_btn = StyledButton("清空", button_type="secondary")
-        self.clear_btn.clicked.connect(self.clear_all_files)
-        toolbar_layout.addWidget(self.clear_btn)
         
         toolbar_card.add_layout(toolbar_layout)
         
         left_layout.addWidget(toolbar_card)
         
-        file_list_card = CardWidget("文件列表（可多选）")
+        file_list_card = CardWidget("文件列表（可多选，右键菜单）")
         
         self.file_list_widget = QListWidget()
         self.file_list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.file_list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.file_list_widget.customContextMenuRequested.connect(self.show_file_list_context_menu)
         self.file_list_widget.itemClicked.connect(self.on_file_select)
         self.file_list_widget.itemDoubleClicked.connect(self.on_file_double_click)
         file_list_card.add_widget(self.file_list_widget)
@@ -568,6 +558,11 @@ class TextProcessorWindow(QMainWindow):
         work_dir_layout.addWidget(self.work_dir_label)
         
         work_dir_layout.addStretch()
+        
+        self.set_work_dir_btn = StyledButton("设置", button_type="secondary")
+        self.set_work_dir_btn.setMaximumWidth(60)
+        self.set_work_dir_btn.clicked.connect(self.set_work_dir_dialog)
+        work_dir_layout.addWidget(self.set_work_dir_btn)
         
         self.open_work_dir_btn = StyledButton("打开", button_type="secondary")
         self.open_work_dir_btn.setMaximumWidth(60)
@@ -1219,7 +1214,6 @@ class TextProcessorWindow(QMainWindow):
             return QIcon(pixmap)
         
         self.import_btn.setIcon(create_icon("folder"))
-        self.import_multi_btn.setIcon(create_icon("folder"))
         self.dedup_process_btn.setIcon(create_icon("reload"))
         self.export_process_btn.setIcon(create_icon("reload"))
         self.extract_process_btn.setIcon(create_icon("reload"))
@@ -1565,6 +1559,36 @@ class TextProcessorWindow(QMainWindow):
                 self.work_dir_label.setText(f"输出目录: {self.work_dir}")
                 self.ensure_work_dir()
                 self.save_settings()
+    
+    def set_work_dir_dialog(self):
+        dir_path = QFileDialog.getExistingDirectory(self, "选择工作目录", self.work_dir)
+        if dir_path:
+            self.work_dir = dir_path
+            self.work_dir_label.setText(f"输出目录: {self.work_dir}")
+            self.ensure_work_dir()
+            self.save_settings()
+    
+    def show_file_list_context_menu(self, pos):
+        from PyQt6.QtGui import QAction
+        from PyQt6.QtWidgets import QMenu
+        
+        menu = QMenu(self)
+        
+        import_action = QAction("导入文件...", self)
+        import_action.triggered.connect(self.import_multi_files)
+        menu.addAction(import_action)
+        
+        menu.addSeparator()
+        
+        remove_action = QAction("移除选中文件", self)
+        remove_action.triggered.connect(self.remove_selected_files)
+        menu.addAction(remove_action)
+        
+        clear_action = QAction("清空所有文件", self)
+        clear_action.triggered.connect(self.clear_all_files)
+        menu.addAction(clear_action)
+        
+        menu.exec(self.file_list_widget.mapToGlobal(pos))
     
     def open_work_dir(self):
         if os.path.exists(self.work_dir):
